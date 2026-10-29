@@ -56,14 +56,23 @@ class HammingCode(CorrectionCode):
         self.G = G
         self.H = H
 
+    def syndrome(self, message: List[int]) -> List[int]:
+        return (self.H @ message) % 2 
+
     def encode(self, data: List[int]) -> List[int]:
-        pass
+        return (data @ self.G) % 2
 
     def decode(self, received: List[int]) -> List[int]:
         pass
 
 def main():
     code = HammingCode(3)
+    print(code.G)
+    print(code.H)
+    codeword=[1, 0, 1, 1]
+    message = code.encode(codeword)
+    print(message)
+    print(code.syndrome(message))
     print("Hello from fuchs!")
 
 if __name__ == "__main__":
