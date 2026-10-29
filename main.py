@@ -56,6 +56,17 @@ class HammingCode(CorrectionCode):
         self.G = G
         self.H = H
 
+        syndromes = {}
+        zero_syndrome = tuple(np.zeros(r, dtype=int))
+        syndromes[zero_syndrome] = np.zeros(n, dtype=int)
+        for i in range(n):
+            e = np.zeros(n, dtype=int)
+            e[i] = 1
+            s = tuple(self.syndrome(e))
+            syndromes[s] = e
+
+        self.syndromes = syndromes
+
     def syndrome(self, message: List[int]) -> List[int]:
         return (self.H @ message) % 2 
 
@@ -63,17 +74,22 @@ class HammingCode(CorrectionCode):
         return (data @ self.G) % 2
 
     def decode(self, received: List[int]) -> List[int]:
-        pass
+        return ((received + self.syndromes[tuple(self.syndrome(received))]) % 2)[:self.k]
 
 def main():
     code = HammingCode(3)
+    print("G matrix")
     print(code.G)
+    print("H matrix")
     print(code.H)
     codeword=[1, 0, 1, 1]
+    print(codeword)
     message = code.encode(codeword)
     print(message)
     print(code.syndrome(message))
-    print("Hello from fuchs!")
+    message[0] = 0 if message[0] else 1 
+    print(code.syndrome(message))
+    print(code.decode(message))
 
 if __name__ == "__main__":
     main()
