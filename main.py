@@ -1,9 +1,16 @@
 from abc import ABC, abstractmethod
 import numpy as np
 from typing import Union, List
+from enum import Enum
 
 def is_power_of_two(n):
     return n > 0 and n.bit_count() == 1
+
+
+class DecodeResult(Enum):
+    SUCCESS = 0
+    REPAIRED = 1
+    ERROR = 2
 
 class CorrectionCode(ABC):
     """Abstract base class for error-correction codes."""
@@ -22,8 +29,8 @@ class HammingCode(CorrectionCode):
     def __init__(self, r: int):
         if (r < 2): # bound from the other side?
             raise ValueError('Wrong value of r when initaliazing HammingCode.')
-        n = 2**r - 1 # message length
-        k = n - r # codeword length
+        n = 2**r - 1 # codeword length
+        k = n - r #  message length
         G = np.zeros((k, n), dtype=int)
         H = np.zeros((n - k, n), dtype=int)
 
@@ -67,29 +74,54 @@ class HammingCode(CorrectionCode):
 
         self.syndromes = syndromes
 
-    def syndrome(self, message: List[int]) -> List[int]:
-        return (self.H @ message) % 2 
+    def syndrome(self, message: np.ndarray) -> np.ndarray:
+        return (self.H @ message) % 2
 
-    def encode(self, data: List[int]) -> List[int]:
+    def encode(self, data: np.ndarray) -> np.ndarray:
         return (data @ self.G) % 2
+    
+    def decode_concat(self, data: np.ndarray) -> np.ndarray:
+        pass
 
-    def decode(self, received: List[int]) -> List[int]:
-        return ((received + self.syndromes[tuple(self.syndrome(received))]) % 2)[:self.k]
+    def decode(self, received: np.ndarray) -> tuple[np.ndarray, DecodeResult]:
+        if len(received) != self.n:
+            raise SizeError("Decode attempt of message with invalid length")
 
-def main():
+        error = self.syndromes.get(tuple(self.syndrome(received)), None)
+        print(error)
+        if error is None:
+            return np.array([], dtype=int), DecodeResult.ERROR
+        else:
+            if np.any(error):
+                corrected = (received + error) % 2
+                return [corrected[:self.k], DecodeResult.REPAIRED]
+            else:
+                return [received[:self.k], DecodeResult.SUCCESS]
+
+def run_example(codeword):
     code = HammingCode(3)
     print("G matrix")
     print(code.G)
     print("H matrix")
     print(code.H)
-    codeword=[1, 0, 1, 1]
-    print(codeword)
+    print("codeword: ", codeword)
     message = code.encode(codeword)
-    print(message)
-    print(code.syndrome(message))
-    message[0] = 0 if message[0] else 1 
-    print(code.syndrome(message))
-    print(code.decode(message))
+    print("message: ", message)
+    print("syndrome: ", code.syndrome(message))
+    print("decode: ", code.decode(message))
+
+    message[0] = 0 if message[0] else 1
+    print("message after flip: ", message)
+    print("syndrome after flip: ", code.syndrome(message))
+    print("decode: ", code.decode(message))
+
+    message[1] = 0 if message[1] else 1
+    print("message after flip: ", message)
+    print("syndrome after flip: ", code.syndrome(message))
+    print("decode: ", code.decode(message))
+
+def main():
+    run_example([1, 0, 1, 1])
 
 if __name__ == "__main__":
     main()
