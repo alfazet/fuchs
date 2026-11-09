@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 from typing import Union, List
 from enum import Enum
+from collections import Counter
 
 
 Bits = Union[bytes, bytearray, List[int], np.ndarray]
@@ -18,6 +19,12 @@ def as_bits(data: Bits) -> np.ndarray:
     if bits.size and not np.isin(bits, (0, 1)).all():
         raise CodeError("data must contain only 0 and 1")
     return bits.astype(np.uint8)
+
+
+def pad_to_multiple(bits: Bits, k: int) -> np.ndarray:
+    b = as_bits(bits)
+    rem = len(b) % k
+    return b if rem == 0 else np.concatenate([b, np.zeros(k - rem, dtype=np.uint8)])
 
 
 def is_power_of_two(n):
@@ -39,7 +46,7 @@ class CorrectionCode(ABC):
         pass
 
     @abstractmethod
-    def decode(self, received: Bits) -> tuple[np.ndarray, DecodeResult]:
+    def decode(self, received: Bits) -> tuple[np.ndarray, List[DecodeResult]]:
         """Decodes the received data, detecting and correcting any correctable errors."""
         pass
 
@@ -105,16 +112,13 @@ class HammingCode(CorrectionCode):
             raise CodeError(f"expected a codeword of length {self.n}, got {len(w)}")
         return (self.H.astype(np.int64) @ w.astype(np.int64)) % 2
 
-    def encode(self, data: Bits) -> np.ndarray:
+    def encode_block(self, data: Bits) -> np.ndarray:
         m = as_bits(data)
         if len(m) != self.k:
             raise CodeError(f"expected {self.k} message bits, got {len(m)}")
         return ((m.astype(np.int64) @ self.G.astype(np.int64)) % 2).astype(np.uint8)
 
-    def decode_concat(self, data: np.ndarray) -> np.ndarray:
-        pass
-
-    def decode(self, received: Bits) -> tuple[np.ndarray, DecodeResult]:
+    def decode_block(self, received: Bits) -> tuple[np.ndarray, DecodeResult]:
         y = as_bits(received)
         if len(y) != self.n:
             raise SizeError("Decode attempt of message with invalid length")
@@ -128,6 +132,27 @@ class HammingCode(CorrectionCode):
             corrected = (y + error) % 2
             return [corrected[: self.k], DecodeResult.REPAIRED]
         return [y[: self.k], DecodeResult.SUCCESS]
+
+    def encode(self, data: Bits) -> np.ndarray:
+        bits = as_bits(data)
+        if len(bits) % self.k:
+            raise SizeError(
+                f"{len(bits)} bits is not a multiple of k={self.k}; "
+                "use pad_to_multiple(bits, code.k) first"
+            )
+        blocks = bits.reshape(-1, self.k).astype(np.int64)
+        return np.concatenate([self.encode_block(b) for b in blocks])
+
+    def decode(self, received: Bits) -> tuple[np.ndarray, List[DecodeResult]]:
+        bits = as_bits(received)
+        if len(bits) % self.n:
+            raise CodeError(f"{len(bits)} bits is not a multiple of n={self.n}")
+        out, results = [], []
+        for block in bits.reshape(-1, self.n):
+            data, res = self.decode_block(block)
+            out.append(data)
+            results.append(res)
+        return (np.concatenate(out) if out else np.zeros(0, dtype=np.uint8)), results
 
 
 def run_example(codeword):
@@ -153,8 +178,35 @@ def run_example(codeword):
     print("decode: ", code.decode(message))
 
 
+def run_example2(payload=b"MAGAZYN-12"):
+    code = HammingCode(3)
+    # print("G matrix")
+    # print(code.G)
+    # print("H matrix")
+    # print(code.H)
+
+    data = pad_to_multiple(as_bits(payload), code.k)
+    coded = code.encode(data)
+
+    def show(label, bits):
+        out, res = code.decode(bits)
+        text = bytes(np.packbits(out[: 8 * len(payload)]))
+        print(f"{label:24} {text!r:16} {dict(Counter(r.name for r in res))}")
+
+    show("clean", coded)
+    coded[0] ^= 1
+    show("flip cell 0", coded)
+    coded[17] ^= 1
+    show("+ flip cell 17", coded)
+    coded[18] ^= 1
+    show("+ flip cell 18", coded)
+
+
 def main():
+    print("--- example 1 ---")
     run_example([1, 0, 1, 1])
+    print("\n--- example 2 ---")
+    run_example2()
 
 
 if __name__ == "__main__":
