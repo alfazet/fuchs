@@ -133,8 +133,8 @@ class HammingCode(CorrectionCode):
             return np.array([], dtype=np.uint8), DecodeResult.ERROR
         if np.any(error):
             corrected = (y + error) % 2
-            return [corrected[: self.k], DecodeResult.REPAIRED]
-        return [y[: self.k], DecodeResult.SUCCESS]
+            return corrected[: self.k], DecodeResult.REPAIRED
+        return y[: self.k], DecodeResult.SUCCESS
 
     def encode(self, data: Bits) -> np.ndarray:
         bits = as_bits(data)
