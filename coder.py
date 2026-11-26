@@ -43,3 +43,6 @@ def encode_to_image(s: str, path, w: int, l: int = -1) -> None:
     rect = _rectangulate(enc_bits, w, l)
     iio.write_bits(rect, path)
 
+def decode_from_image(path) -> str:
+    rect = iio.read_bits(path)
+    return 'asdf'

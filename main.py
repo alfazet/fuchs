@@ -1,8 +1,7 @@
 import numpy as np
 from hamming import HammingCode, pad_to_multiple
 from collections import Counter
-from coder import encode_to_image
-
+from coder import encode_to_image, decode_from_image
 
 def run_example(codeword):
     code = HammingCode(3)
@@ -57,6 +56,8 @@ def main():
     print("\n--- example 2 ---")
     run_example2()
     encode_to_image('tung tung tung sahur', 'output.png', 11)
+    s = decode_from_image('input.jpg')
+    print(s)
 
 
 if __name__ == "__main__":

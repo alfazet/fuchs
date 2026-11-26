@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import cv2
 import numpy as np
 from PIL import Image
 
@@ -53,6 +54,106 @@ def read_bits(path, threshold: float = 0.5) -> np.ndarray:
     mean = blocks.mean(axis=(1, 3))
 
     return (mean <= threshold).astype(np.uint8)
+
+
+
+def save(pixels, path):
+    img = Image.fromarray(pixels, mode="L")
+    img.save(path, format="PNG")
+
+def read_bits(path) -> np.ndarray:
+    img = cv2.imread(path, 0)
+    h, w = img.shape
+    block = w // 4 + 1 - (w //4) % 2
+    img = cv2.adaptiveThreshold(img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, block, 2)
+
+    # clean up image
+    kernel = np.ones((21,21), np.uint8)
+    img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel)
+    img = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel)
+
+    def check_for_y(img, x, y, y_step):
+        for yc in range(y_step):
+            if y + yc < h and img[y + yc, x] < 1:
+                return (True, y + yc)
+        return (False, -1)
+
+
+    # Find horizontal or slightly tilted lines
+    step = 11
+    y_step = step
+    bars = []
+    y = 0
+    while y < h:
+        x = 0
+        while x < w:
+            bar_width = 0
+            bars.append((x,y,0,0,0))
+            while True:
+                ok, next_y = check_for_y(img, x, y, y_step)
+                if not ok:
+                    break
+                y = next_y
+                bar_width += step
+                x += step
+                if x >= w or y >= h:
+                    break;
+            if bar_width > w//3:
+                xs, ys, _,_,_ = bars[-1]
+                bars[-1] = (xs,ys,x,y,bar_width)
+            else:
+                bars.pop()
+            x += step
+        y += step
+
+    # Get longest found lines
+    # (We assume the two longest lines are those of the rectangle frame)
+    widest = second_widest = (0,0,0,0,0)
+    for b in bars:
+        if b[-1] > second_widest[-1]:
+            if b[-1] > widest[-1]:
+                second_widest = widest
+                widest = b
+            else:
+                second_widest = b
+    
+    # Crop image
+    xs = widest[0] if widest[0] < second_widest[0] else second_widest[0]
+    ys = widest[1] if widest[1] < second_widest[1] else second_widest[1]
+    xe = widest[2] if widest[2] > second_widest[2] else second_widest[2]
+    ye = widest[3] if widest[3] > second_widest[3] else second_widest[3]
+
+    img = img[ys:ye, xs:xe]
+    save(img, 'output.png')
+                
+        
+
+    # invert image
+    '''for i in img:
+        i = 1 - i
+
+    cont, _ = cv2.findContours(img, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+    for c in cont:
+        if cv2.contourArea(c) < 1000:
+            continue
+
+        rect = cv2.minAreaRect(c)
+        (center, (h,w), angle) = rect
+        if (h < w):
+            w,h = h,w
+            angle += 90
+        if w < 10:
+            continue
+        if angle > 90:
+            angle -= 180
+        if not (-30 <= angle <= 30):
+            continue
+        print('przeszlo')
+        box = cv2.boxPoints(rect)
+        box = np.int32(box)
+        cv2.drawContours(img, [box], 0, (127, 127, 127), 2)'''
+    save(img, 'output.png')
+
 
 def write_bits(bits, path) -> None:
     """
