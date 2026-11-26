@@ -1,6 +1,7 @@
 import numpy as np
 from hamming import HammingCode, pad_to_multiple
 from collections import Counter
+from coder import encode_to_image
 
 
 def run_example(codeword):
@@ -55,6 +56,7 @@ def main():
     run_example([1, 0, 1, 1])
     print("\n--- example 2 ---")
     run_example2()
+    encode_to_image('tung tung tung sahur', 'output.png', 11)
 
 
 if __name__ == "__main__":

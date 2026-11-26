@@ -54,21 +54,31 @@ def read_bits(path, threshold: float = 0.5) -> np.ndarray:
 
     return (mean <= threshold).astype(np.uint8)
 
-
-def write_bits(bits: np.ndarray, path) -> None:
+def write_bits(bits, path) -> None:
     """
-    Save a (BITS_PER_SIDE, BITS_PER_SIDE) array of bits as a GRID_SIZE x GRID_SIZE PNG file.
-    Each bit becomes a BLOCK_SIZE x BLOCK_SIZE block of white (0) or dark (1) pixels.
+    Save a 2D array of bits (0 = white, 1 = dark) as a PNG.
+    Each bit is a BLOCK_SIZE x BLOCK_SIZE block, surrounded by an alternating
+    black/white frame and a solid black outer frame.
     """
     arr = np.asarray(bits)
-    expected = (BITS_PER_SIDE, BITS_PER_SIDE)
-    if arr.shape != expected:
-        raise ValueError(f"expected bit array of shape {expected} (got {arr.shape})")
+    if arr.ndim != 2:
+        raise ValueError(f"expected a 2D array (got {arr.ndim}D)")
     if not np.isin(arr, (0, 1)).all():
         raise ValueError("bit array must contain only 0s and 1s")
 
-    pixels = np.kron(
-        arr.astype(np.uint8), np.ones((BLOCK_SIZE, BLOCK_SIZE), dtype=np.uint8)
-    )
-    image = Image.fromarray((1 - pixels) * 255, mode="L")
-    image.save(path, format="PNG")
+    t = max(1, BLOCK_SIZE // 4)
+
+    pixels = np.kron(arr.astype(np.uint8), np.ones((BLOCK_SIZE, BLOCK_SIZE), dtype=np.uint8))
+    h, w = pixels.shape
+
+    cols = (np.arange(w) // BLOCK_SIZE) % 2
+    rows = (np.arange(h) // BLOCK_SIZE) % 2
+
+    img = np.zeros((h + 2*t, w + 2*t), dtype=np.uint8)
+    img[:t, t:-t] = img[-t:, t:-t] = cols
+    img[t:-t, :t] = img[t:-t, -t:] = rows[:, None]
+    img[:t, :t] = img[:t, -t:] = img[-t:, :t] = img[-t:, -t:] = 1
+    img[t:-t, t:-t] = pixels
+
+    img = np.pad(img, t, constant_values=1)
+    Image.fromarray((1 - img) * 255).save(path)
