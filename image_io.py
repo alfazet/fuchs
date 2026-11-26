@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import cv2
+import math
 import numpy as np
 from PIL import Image
 
@@ -116,42 +117,26 @@ def read_bits(path) -> np.ndarray:
                 widest = b
             else:
                 second_widest = b
-    
-    # Crop image
+
+    # Rotate image
+    angle = math.degrees(math.atan2(widest[3] - widest[1], widest[2] - widest[0]))
     xs = widest[0] if widest[0] < second_widest[0] else second_widest[0]
     ys = widest[1] if widest[1] < second_widest[1] else second_widest[1]
     xe = widest[2] if widest[2] > second_widest[2] else second_widest[2]
     ye = widest[3] if widest[3] > second_widest[3] else second_widest[3]
+    xc = (xs + xe) // 2
+    yc = (ys + ye) // 2
+    rot_matrix = cv2.getRotationMatrix2D((xc, yc), angle, 1)
+    img = cv2.warpAffine(img, rot_matrix, (w, h))
+    # Rotate corner points
+    pts = np.array([[[xs,ys]], [[xe,ye]]], dtype=np.float32)
+    rot_pts = cv2.transform(pts, rot_matrix)
+    xs, ys = rot_pts[0][0]
+    xe, ye = rot_pts[1][0]
+    xs, ys, xe, ye = int(xs), int(ys), int(xe), int(ye)
 
+    # Crop image
     img = img[ys:ye, xs:xe]
-    save(img, 'output.png')
-                
-        
-
-    # invert image
-    '''for i in img:
-        i = 1 - i
-
-    cont, _ = cv2.findContours(img, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
-    for c in cont:
-        if cv2.contourArea(c) < 1000:
-            continue
-
-        rect = cv2.minAreaRect(c)
-        (center, (h,w), angle) = rect
-        if (h < w):
-            w,h = h,w
-            angle += 90
-        if w < 10:
-            continue
-        if angle > 90:
-            angle -= 180
-        if not (-30 <= angle <= 30):
-            continue
-        print('przeszlo')
-        box = cv2.boxPoints(rect)
-        box = np.int32(box)
-        cv2.drawContours(img, [box], 0, (127, 127, 127), 2)'''
     save(img, 'output.png')
 
 
