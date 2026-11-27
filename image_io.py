@@ -266,12 +266,32 @@ def read_bits(path) -> np.ndarray:
 
     # Crop image
     img = img[ys:ye, xs:xe]
+    h, w = img.shape
+
+    # Now image may have some space left on the left and right side of
+    # rectangle. To remove it, image is rotated, horizontal (vertical before
+    # rotation) bars are found, image is cropped once again and it is
+    # rotated back to its original orientation
+    img = img.swapaxes(0, 1)
+    bars = _find_bars(img, w, h)
+    widest = bars[0]
+    second_widest = bars[1]
+    print(f'w:{widest}, s:{second_widest}')
+    # These bars have to be close to img width in their length
+    # Otherwise do not crop as one bar must have been cropped earlier
+    if widest[-1] / w > 0.5 and second_widest[-1] / w > 0.5:
+        xs = widest[0] if widest[0] < second_widest[0] else second_widest[0]
+        ys = widest[1] if widest[1] < second_widest[1] else second_widest[1]
+        xe = widest[2] if widest[2] > second_widest[2] else second_widest[2]
+        ye = widest[3] if widest[3] > second_widest[3] else second_widest[3]
+        img = img[ys:ye, xs:xe]
+    img = img.swapaxes(0, 1)
     _save(img, 'output.png')
 
     # Get bit size
     bit_size = _get_bit_size(img)
     h, w = img.shape
-    bit_h, bit_w = int(math.floor(h / bit_size)), int(math.floor(w / bit_size))
+    bit_h, bit_w = int(h - bit_size/2) // bit_size, int(w - bit_size/2) // bit_size
     print(f'dims: {bit_w}x{bit_h}')
 
 
