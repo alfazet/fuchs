@@ -1,322 +1,115 @@
-from __future__ import annotations
-
 import cv2
-import math
 import numpy as np
 from PIL import Image
 
-GRID_SIZE = 256
-BLOCK_SIZE = 4
-BITS_PER_SIDE = GRID_SIZE // BLOCK_SIZE
-
-_LUMA_COEFFS = np.array([0.299, 0.587, 0.114], dtype=np.float64)
+BLOCK_SIZE = 4   # only used by write_bits
+B = 16           # bit size (px) after straightening the photo
+R = 0.25         # thickness of one frame ring as a fraction of a bit (same as in write_bits)
 
 
-def _load_luma(path) -> np.ndarray:
+def _line(P):
+    """Line fitted to points: (point, direction)."""
+    vx, vy, x, y = cv2.fitLine(P, cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()
+    return np.array([x, y]), np.array([vx, vy])
+
+
+def _cross(l1, l2):
+    """Intersection of two lines."""
+    (p1, d1), (p2, d2) = l1, l2
+    t = np.linalg.solve(np.array([d1, -d2]).T, p2 - p1)[0]
+    return p1 + t * d1
+
+
+def _find_quad(gray):
+    """Find the 4 corners of the outer black frame: tl, tr, br, bl."""
+    bw = cv2.threshold(cv2.GaussianBlur(gray, (5, 5), 0), 0, 255,
+                       cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+    k = max(3, gray.shape[1] // 200)
+    bw = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
+    cnts, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    cnt = max(cnts, key=cv2.contourArea)
+    hull = cv2.convexHull(cnt)
+
+    for eps in (0.01, 0.02, 0.04, 0.08):
+        approx = cv2.approxPolyDP(hull, eps * cv2.arcLength(hull, True), True)
+        if len(approx) == 4:
+            pts = approx.reshape(4, 2)
+            break
+    else:  # no quadrilateral found -> plain rotated rectangle
+        pts = cv2.boxPoints(cv2.minAreaRect(hull))
+
+    s, d = pts.sum(axis=1), pts[:, 1] - pts[:, 0]
+    quad = np.float32([pts[s.argmin()], pts[d.argmin()], pts[s.argmax()], pts[d.argmax()]])
+
+    # Corners are rounded after blurring, so refine them: fit a line to each side
+    # (ignoring the ends near the corners) and take intersections of neighbouring lines.
+    P = cnt.reshape(-1, 2).astype(np.float32)
+    lines = []
+    for a, b in zip(quad, np.roll(quad, -1, axis=0)):
+        L = np.linalg.norm(b - a)
+        d = (b - a) / L
+        rel = (P - a) @ d / L
+        dist = np.abs((P - a) @ np.array([-d[1], d[0]]))
+        m = (rel > 0.15) & (rel < 0.85) & (dist < 0.03 * L)
+        if m.sum() < 10:
+            return quad
+        lines.append(_line(P[m]))
+    return np.float32([_cross(lines[i - 1], lines[i]) for i in range(4)])
+
+
+def _warp(gray, quad, w, h):
+    """Straighten the quadrilateral into a w x h rectangle (fixes tilt and perspective)."""
+    dst = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
+    return cv2.warpPerspective(gray, cv2.getPerspectiveTransform(quad, dst), (w, h))
+
+
+def _count_bits(g):
     """
-    Load an image and return the matrix of the luma of its pixels.
-    Transparent pixels are treated as white.
+    How many bits does the top side have? Try every possible n and check for which one
+    the black/white frame matches the pattern 'white, black, white, ...' (as in write_bits).
+    A wrong n shifts the pattern, so its score is close to zero.
+    The top and bottom frames are checked together so that a random match with the data doesn't win.
     """
-    with Image.open(path) as img:
-        rgba = img.convert("RGBA")
-    data = np.asarray(rgba, dtype=np.float64) / 255.0
-    rgb, alpha = data[..., :3], data[..., 3:4]
-    rgb = rgb * alpha + (1.0 - alpha)
-
-    return rgb @ _LUMA_COEFFS
-
-
-def read_bits(path, threshold: float = 0.5) -> np.ndarray:
-    """
-    Read a PNG file and decode it into a (BITS_PER_SIDE, BITS_PER_SIDE) array of bits.
-    The top-left corner of the grid is the intersection of the topmost row and
-    the leftmost column containing a pixel with luma <= `threshold`. Decoding starts
-    from there and anything beyond GRID_SIZE x GRID_SIZE is ignored.
-
-    Each BLOCK_SIZE x BLOCK_SIZE block of pixels is decoded as a 0 if its
-    mean luma is above `threshold`, and 1 otherwise.
-    """
-    luma = _load_luma(path)
-    dark = luma <= threshold
-    if not dark.any():
-        raise ValueError("invalid data (no dark pixels found)")
-
-    top = int(np.flatnonzero(dark.any(axis=1))[0])
-    left = int(np.flatnonzero(dark.any(axis=0))[0])
-
-    data_region = luma[top:, left:]
-    height, width = data_region.shape
-    if height < GRID_SIZE or width < GRID_SIZE:
-        raise ValueError(
-            f"decoding area {width} x {height} too small (required minimum is {GRID_SIZE} x {GRID_SIZE})"
-        )
-    data_region = data_region[:GRID_SIZE, :GRID_SIZE]
-    blocks = data_region.reshape(BITS_PER_SIDE, BLOCK_SIZE, BITS_PER_SIDE, BLOCK_SIZE)
-    mean = blocks.mean(axis=(1, 3))
-
-    return (mean <= threshold).astype(np.uint8)
-
-
-def _save(pixels, path):
-    img = Image.fromarray(pixels, mode="L")
-    img.save(path, format="PNG")
-
-def _get_longest_bars(bars: array(tuple[int, int, int, int, int])) -> array(tuple[int, int, int, int, int]):
-    """
-    Looks through array of bars and extracts the two longest ones
-    but such that they are not too close to each other
-    """
-    widest = second_widest = (0,0,0,0,0)
-    dist_threshold = 100
-
-    def additional_check(b, widest):
-        return abs(b[1] - widest[1]) > dist_threshold or abs(widest[-1]) < 1 or b[-1] / widest[-1] > 1.5
-
-    for b in bars:
-        if b[-1] > second_widest[-1]:
-            if b[-1] > widest[-1] and additional_check(b, widest):
-                second_widest = widest
-                widest = b
-            elif additional_check(b, widest):
-                second_widest = b
-    return [widest, second_widest]
-
-
-def _find_bars_loop(check_for_y: Callable[[np.ndarray, int, int, int], tuple[bool, int]], \
-    y: int, step: int, y_step: int, img: np.ndarray, h: int, w: int) \
-    -> array(tuple[int, int, int, int, int]):
-    """
-    Function scans image on given 'y' (vertical) coordinate
-    from left to right and seeks for somewhat horizontal bars.
-    If found bar is of length greater than threshold, such bar
-    is saved.
-    """
-    bars = []
-    x = 0
-    while x < w:
-        bar_width = 0
-        bars.append((x,y,0,0,0))
-        while True:
-            ok, next_y = check_for_y(img, x, y, y_step)
-            if not ok:
-                break
-            y = next_y
-            bar_width += step
-            x += step
-            if x >= w or y >= h:
-                break;
-        if bar_width > w//3:
-            xs, ys, _,_,_ = bars[-1]
-            bars[-1] = (xs,ys,x,y,bar_width)
-        else:
-            bars.pop()
-        x += step
-
-    return bars
-
-
-def _find_bars_up(step: int, y_step: int, img: np.ndarray, h: int, w: int) \
-    -> array(tuple[int, int, int, int, int]):
-    """
-    Function scans image from bottom to up and looks for bars
-    """
-    bars = []
-
-    def check_for_y_up(img, x, y, y_step):
-        for yc in range(y_step):
-            if 0 <= y - yc and img[y - yc, x] < 1:
-                return (True, y - yc)
-        return (False, -1)
-
-    y = h - 1
-    while y >= 0:
-        new_bars = _find_bars_loop(check_for_y_up, y, step, y_step, img, h, w)
-        bars = bars + new_bars
-        y -= step
-
-    return bars
-
-def _find_bars_down(step: int, y_step: int, img: np.ndarray, h: int, w: int) \
-    -> array(tuple[int, int, int, int, int]):
-    """
-    Function scans image from up to bottom and looks for bars
-    """
-    bars = []
-
-    def check_for_y_down(img, x, y, y_step):
-        for yc in range(y_step):
-            if y + yc < h and img[y + yc, x] < 1:
-                return (True, y + yc)
-        return (False, -1)
-
-    y = 0
-    while y < h:
-        new_bars = _find_bars_loop(check_for_y_down, y, step, y_step, img, h, w)
-        bars = bars + new_bars
-        y += step
-
-    return bars
-
-
-def _find_bars(img: np.ndarray, h: int, w: int) -> array(tuple[int, int, int, int, int]):
-    """
-    Find horizontal (or slightly tilted) bars (lines) in the binarized image
-    and extract two longest ones that to not lie too close to each other
-
-    Function works by scanning image 2 times:
-     - from bottom to up (_find_bars_up), seeking for bars going up
-     - from up to bottom (_find_bars_down), seeking for bars going down
-    Then from both results two longest bars are chosen for each result.
-    At the end the two with the longest bar is chosen
-    """
-    step = 11
-    y_step = step
-
-    bars_up = _find_bars_up(step, y_step, img, h, w)
-    bars_down = _find_bars_down(step, y_step, img, h, w)
-
-    # Get longest found lines
-    # (We assume the two longest lines are those of the rectangle frame)
-    longest_up = _get_longest_bars(bars_up)
-    longest_down = _get_longest_bars(bars_down)
-
-    if longest_up[0][-1] > longest_down[0][-1]:
-        return longest_up
-    elif longest_up[0][-1] < longest_down[0][-1]:
-        return longest_down
-    else:
-        if longest_up[1][-1] > longest_down[1][-1]:
-            return longest_up
-        else:
-            return longest_down
-
-
-def _get_bit_size(img: np.ndarray) -> int:
-    """
-    Find first two bit size markings in frame and measure
-    their width to acquire bit size in pixels
-
-    Seeking for markings is done vertically; function seeks for
-    transisions and measures distance between them. Distance ratio
-    should be close to 1 due to marks being of same length
-    """
-    step = 8
-    h, w = img.shape
-
-    def bincol(color):
-        return color > 64
-
-    for x in range(0, w, step):
-        # Look through row of image
-        transitions = 0 # 0 for black and 1 for white
-        prev_color = color = bincol(img[0, x])
-        widths = [0, 0]
-        for y in range(1, h):
-            prev_color = color
-            color = bincol(img[y, x])
-            if prev_color != color:
-                transitions += 1
-                if transitions == 1 and color == False:
-                    transitions -= 1
-
-            # Since at first should be black region of outer solid black frame,
-            # it is ommited
-            if transitions > 0:
-                if transitions > 2:
-                    break
-                # Count up pixels of each color
-                widths[transitions - 1] += 1
-
-        # Measure ratio; if found bit size markings then ratio should be close to 1
-        if widths[1] == 0:
-            continue
-        ratio = widths[0] / widths[1]
-        if 0.9 <= ratio <= 1.1:
-            return (widths[0] + widths[1]) // 2
+    L = g.shape[1]
+    mid = (np.percentile(g, 5) + np.percentile(g, 95)) / 2   # midpoint between black and white
+    best_score, best_n = -1e9, 0
+    for n in range(2, 400):
+        b = L / (n + 4 * R)                      # bit size assuming n bits
+        if b < 3:
+            break
+        y0 = int(1.2 * R * b)                    # middle of the ring with alternating colors
+        y1 = max(y0 + 1, int(1.8 * R * b))
+        idx = (2 * R * b + (np.arange(n) + 0.5) * b).astype(int)   # centers of the frame segments
+        sign = 1 - 2 * (np.arange(n) % 2)        # +1 white, -1 black
+        score = 0
+        for side in (g, g[::-1]):                # top and bottom
+            prof = side[y0:y1].mean(axis=0)
+            score += (sign * np.sign(prof[idx] - mid)).mean()   # only sign agreement, no amplitude
+        score *= np.sqrt(n)                      # so that a small n doesn't win by chance
+        if score > best_score:
+            best_score, best_n = score, n
+    return best_n
 
 
 def read_bits(path) -> np.ndarray:
-    img = cv2.imread(path, 0)
-    h, w = img.shape
-    block = w // 4 + 1 - (w //4) % 2
-    img = cv2.adaptiveThreshold(img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, block, 2)
+    gray = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    quad = _find_quad(gray)
+    tl, tr, br, bl = quad
 
-    # clean up image
-    kernel = np.ones((21,21), np.uint8)
-    img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel)
-    img = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel)
+    # 1. rough straightening (size from side lengths) and counting the bits
+    w = int(max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl)))
+    h = int(max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr)))
+    rough = _warp(gray, quad, w, h)
+    W, H = _count_bits(rough), _count_bits(rough.T)
 
-    # Find horizontal or slightly tilted lines
-    bars = _find_bars(img, h, w)
-    widest = bars[0]
-    second_widest = bars[1]
+    # 2. exact straightening: every bit is exactly B x B pixels
+    img = _warp(gray, quad, int((W + 4 * R) * B), int((H + 4 * R) * B))
 
-    # Rotate image
-    angle = math.degrees(math.atan2(second_widest[3] - second_widest[1], \
-        second_widest[2] - second_widest[0]))
-    xs = widest[0] if widest[0] < second_widest[0] else second_widest[0]
-    ys = widest[1] if widest[1] < second_widest[1] else second_widest[1]
-    xe = widest[2] if widest[2] > second_widest[2] else second_widest[2]
-    ye = widest[3] if widest[3] > second_widest[3] else second_widest[3]
-    xc = (xs + xe) // 2
-    yc = (ys + ye) // 2
-    rot_matrix = cv2.getRotationMatrix2D((xc, yc), angle, 1)
-    img = cv2.warpAffine(img, rot_matrix, (w, h))
-    # Rotate corner points
-    pts = np.array([[[xs,ys]], [[xe,ye]]], dtype=np.float32)
-    rot_pts = cv2.transform(pts, rot_matrix)
-    xs, ys = rot_pts[0][0]
-    xe, ye = rot_pts[1][0]
-    xs, ys, xe, ye = int(xs), int(ys), int(xe), int(ye)
-
-    # Crop image
-    img = img[ys:ye, xs:xe]
-    h, w = img.shape
-
-    # Now image may have some space left on the left and right side of
-    # rectangle. To remove it, image is rotated, horizontal (vertical before
-    # rotation) bars are found, image is cropped once again and it is
-    # rotated back to its original orientation
-    img = img.swapaxes(0, 1)
-    bars = _find_bars(img, w, h)
-    widest = bars[0]
-    second_widest = bars[1]
-    print(f'w:{widest}, s:{second_widest}')
-    # These bars have to be close to img width in their length
-    # Otherwise do not crop as one bar must have been cropped earlier
-    if widest[-1] / w > 0.8 and second_widest[-1] / w > 0.8:
-        xs = widest[0] if widest[0] < second_widest[0] else second_widest[0]
-        ys = widest[1] if widest[1] < second_widest[1] else second_widest[1]
-        xe = widest[2] if widest[2] > second_widest[2] else second_widest[2]
-        ye = widest[3] if widest[3] > second_widest[3] else second_widest[3]
-        img = img[ys:ye, xs:xe]
-    img = img.swapaxes(0, 1)
-    _save(img, 'output.png')
-
-    # Get bit size
-    bit_size = _get_bit_size(img)
-    print(f'bs: {bit_size}')
-    # Get code dimensions
-    h, w = img.shape
-    dims = (int(math.floor((h - bit_size/2) / bit_size)), int(math.floor((w - bit_size/2) / bit_size)))
-    bit_h, bit_w = dims
-    print(f'dims: {bit_w}x{bit_h}')
-
-    # Read bits
-    bits = np.ndarray(dims, dtype=np.uint8)
-    delta = bit_size // 6
-    for y in range(bit_h):
-        for x in range(bit_w):
-            x_img = x * bit_size + bit_size // 2
-            y_img = y * bit_size + bit_size // 2
-            bits[y, x] = 0 if img[y_img, x_img] > 64 else 1
-            bits[y, x] = bits[y, x] if img[y_img - delta, x_img - delta] > 64 else bits[y, x] + 1
-            bits[y, x] = bits[y, x] if img[y_img - delta, x_img + delta] > 64 else bits[y, x] + 1
-            bits[y, x] = bits[y, x] if img[y_img + delta, x_img - delta] > 64 else bits[y, x] + 1
-            bits[y, x] = bits[y, x] if img[y_img + delta, x_img + delta] > 64 else bits[y, x] + 1
-            bits[y, x] = 0 if bits[y, x] < 3 else 1
-    print(bits)
-    return bits
+    # 3. reading: mean of the central half of each bit
+    o, q = int(2 * R * B), B // 4
+    cells = img[o:o + H * B, o:o + W * B].reshape(H, B, W, B)[:, q:-q, :, q:-q].mean(axis=(1, 3))
+    thr = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[0]
+    return (cells < thr).astype(np.uint8)
 
 
 def write_bits(bits, path) -> None:
