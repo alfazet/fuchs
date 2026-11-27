@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from hamming import HammingCode, pad_to_multiple
 from collections import Counter
@@ -57,6 +58,8 @@ def run_example4(s='skibidi toaleta'):
     print('Encoded string to image')
     dec_str = decode_from_image(path)
     print(f'Decoded string from image: "{dec_str}"')
+    if os.path.exists(path):    
+        os.remove(path)
 
 def run_example3(path='image.jpg'):
     print(f'Decoding image "{path}"')
