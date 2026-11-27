@@ -50,22 +50,19 @@ def run_example2(payload=b"MAGAZYN-12"):
     coded[18] ^= 1
     show("+ flip cell 18", coded)
 
+def run_example3(path='image.jpg'):
+    print(f'Decoding image "{path}"')
+    dec_str = decode_from_image(path)
+    print(f'Decoded_string: "{dec_str}"')
+
 def run_example4(s='skibidi toaleta'):
-    path = '.example_output.jpg'
+    path = 'example4_output.jpg'
 
     print(f'Input string: "{s}"')
     encode_to_image(s, path, 7)
     print('Encoded string to image')
     dec_str = decode_from_image(path)
     print(f'Decoded string from image: "{dec_str}"')
-    if os.path.exists(path):    
-        os.remove(path)
-
-def run_example3(path='image.jpg'):
-    print(f'Decoding image "{path}"')
-    dec_str = decode_from_image(path)
-    print(f'Decoded_string: "{dec_str}"')
-
 
 def main():
     print("--- example 1 ---")
