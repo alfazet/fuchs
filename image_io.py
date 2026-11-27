@@ -62,6 +62,10 @@ def _save(pixels, path):
     img.save(path, format="PNG")
 
 def _get_longest_bars(bars: array(tuple[int, int, int, int, int])) -> array(tuple[int, int, int, int, int]):
+    """
+    Looks through array of bars and extracts the two longest ones
+    but such that they are not too close to each other
+    """
     widest = second_widest = (0,0,0,0,0)
     dist_threshold = 100
     for b in bars:
@@ -74,69 +78,15 @@ def _get_longest_bars(bars: array(tuple[int, int, int, int, int])) -> array(tupl
     return [widest, second_widest]
 
 
-def _find_bars(img: np.ndarray, h: int, w: int) -> array(tuple[int, int, int, int, int]):
-    step = 11
-    y_step = step
-
-    bars_up = _find_bars_up(step, y_step, img, h, w)
-    bars_down = _find_bars_down(step, y_step, img, h, w)
-
-    # Get longest found lines
-    # (We assume the two longest lines are those of the rectangle frame)
-    longest_up = _get_longest_bars(bars_up)
-    longest_down = _get_longest_bars(bars_down)
-
-    if longest_up[0][-1] > longest_down[0][-1]:
-        return longest_up
-    elif longest_up[0][-1] < longest_down[0][-1]:
-        return longest_down
-    else:
-        if longest_up[1][-1] > longest_down[1][-1]:
-            return longest_up
-        else:
-            return longest_down
-
-
-def _find_bars_up(step: int, y_step: int, img: np.ndarray, h: int, w: int) \
-    -> array(tuple[int, int, int, int, int]):
-    bars = []
-
-    def check_for_y_up(img, x, y, y_step):
-        for yc in range(y_step):
-            if 0 <= y - yc and img[y - yc, x] < 1:
-                return (True, y - yc)
-        return (False, -1)
-
-    y = h - 1
-    while y >= 0:
-        new_bars = _find_bars_loop(check_for_y_up, y, step, y_step, img, h, w)
-        bars = bars + new_bars
-        y -= step
-
-    return bars
-
-def _find_bars_down(step: int, y_step: int, img: np.ndarray, h: int, w: int) \
-    -> array(tuple[int, int, int, int, int]):
-    bars = []
-
-    def check_for_y_down(img, x, y, y_step):
-        for yc in range(y_step):
-            if y + yc < h and img[y + yc, x] < 1:
-                return (True, y + yc)
-        return (False, -1)
-
-    y = 0
-    while y < h:
-        new_bars = _find_bars_loop(check_for_y_down, y, step, y_step, img, h, w)
-        bars = bars + new_bars
-        y += step
-
-    return bars
-
-
 def _find_bars_loop(check_for_y: Callable[[np.ndarray, int, int, int], tuple[bool, int]], \
     y: int, step: int, y_step: int, img: np.ndarray, h: int, w: int) \
     -> array(tuple[int, int, int, int, int]):
+    """
+    Function scans image on given 'y' (vertical) coordinate
+    from left to right and seeks for somewhat horizontal bars.
+    If found bar is of length greater than threshold, such bar
+    is saved.
+    """
     bars = []
     x = 0
     while x < w:
@@ -159,6 +109,126 @@ def _find_bars_loop(check_for_y: Callable[[np.ndarray, int, int, int], tuple[boo
         x += step
 
     return bars
+
+
+def _find_bars_up(step: int, y_step: int, img: np.ndarray, h: int, w: int) \
+    -> array(tuple[int, int, int, int, int]):
+    """
+    Function scans image from bottom to up and looks for bars
+    """
+    bars = []
+
+    def check_for_y_up(img, x, y, y_step):
+        for yc in range(y_step):
+            if 0 <= y - yc and img[y - yc, x] < 1:
+                return (True, y - yc)
+        return (False, -1)
+
+    y = h - 1
+    while y >= 0:
+        new_bars = _find_bars_loop(check_for_y_up, y, step, y_step, img, h, w)
+        bars = bars + new_bars
+        y -= step
+
+    return bars
+
+def _find_bars_down(step: int, y_step: int, img: np.ndarray, h: int, w: int) \
+    -> array(tuple[int, int, int, int, int]):
+    """
+    Function scans image from up to bottom and looks for bars
+    """
+    bars = []
+
+    def check_for_y_down(img, x, y, y_step):
+        for yc in range(y_step):
+            if y + yc < h and img[y + yc, x] < 1:
+                return (True, y + yc)
+        return (False, -1)
+
+    y = 0
+    while y < h:
+        new_bars = _find_bars_loop(check_for_y_down, y, step, y_step, img, h, w)
+        bars = bars + new_bars
+        y += step
+
+    return bars
+
+
+def _find_bars(img: np.ndarray, h: int, w: int) -> array(tuple[int, int, int, int, int]):
+    """
+    Find horizontal (or slightly tilted) bars (lines) in the binarized image
+    and extract two longest ones that to not lie too close to each other
+
+    Function works by scanning image 2 times:
+     - from bottom to up (_find_bars_up), seeking for bars going up
+     - from up to bottom (_find_bars_down), seeking for bars going down
+    Then from both results two longest bars are chosen for each result.
+    At the end the two with the longest bar is chosen
+    """
+    step = 11
+    y_step = step
+
+    bars_up = _find_bars_up(step, y_step, img, h, w)
+    bars_down = _find_bars_down(step, y_step, img, h, w)
+
+    # Get longest found lines
+    # (We assume the two longest lines are those of the rectangle frame)
+    longest_up = _get_longest_bars(bars_up)
+    longest_down = _get_longest_bars(bars_down)
+
+    if longest_up[0][-1] > longest_down[0][-1]:
+        return longest_up
+    elif longest_up[0][-1] < longest_down[0][-1]:
+        return longest_down
+    else:
+        if longest_up[1][-1] > longest_down[1][-1]:
+            return longest_up
+        else:
+            return longest_down
+
+
+def _get_bit_size(img: np.ndarray) -> int:
+    """
+    Find first two bit size markings in frame and measure
+    their width to acquire bit size in pixels
+
+    Seeking for markings is done vertically; function seeks for
+    transisions and measures distance between them. Distance ratio
+    should be close to 1 due to marks being of same length
+    """
+    step = 8
+    h, w = img.shape
+
+    def bincol(color):
+        return color > 64
+
+    for x in range(0, w, step):
+        # Look through row of image
+        transitions = 0 # 0 for black and 1 for white
+        prev_color = color = bincol(img[0, x])
+        widths = [0, 0]
+        for y in range(1, h):
+            prev_color = color
+            color = bincol(img[y, x])
+            if prev_color != color:
+                transitions += 1
+                if transitions == 1 and color == False:
+                    transitions -= 1
+
+            # Since at first should be black region of outer solid black frame,
+            # it is ommited
+            if transitions > 0:
+                if transitions > 2:
+                    break
+                # Count up pixels of each color
+                widths[transitions - 1] += 1
+
+        # Measure ratio; if found bit size markings then ratio should be close to 1
+        if widths[1] == 0:
+            continue
+        ratio = widths[0] / widths[1]
+        if 0.9 <= ratio <= 1.1:
+            return (widths[0] + widths[1]) // 2
 
 
 def read_bits(path) -> np.ndarray:
@@ -197,6 +267,12 @@ def read_bits(path) -> np.ndarray:
     # Crop image
     img = img[ys:ye, xs:xe]
     _save(img, 'output.png')
+
+    # Get bit size
+    bit_size = _get_bit_size(img)
+    h, w = img.shape
+    bit_h, bit_w = int(math.floor(h / bit_size)), int(math.floor(w / bit_size))
+    print(f'dims: {bit_w}x{bit_h}')
 
 
 def write_bits(bits, path) -> None:
