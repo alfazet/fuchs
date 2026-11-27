@@ -57,10 +57,109 @@ def read_bits(path, threshold: float = 0.5) -> np.ndarray:
     return (mean <= threshold).astype(np.uint8)
 
 
-
-def save(pixels, path):
+def _save(pixels, path):
     img = Image.fromarray(pixels, mode="L")
     img.save(path, format="PNG")
+
+def _get_longest_bars(bars: array(tuple[int, int, int, int, int])) -> array(tuple[int, int, int, int, int]):
+    widest = second_widest = (0,0,0,0,0)
+    dist_threshold = 100
+    for b in bars:
+        if b[-1] > second_widest[-1]:
+            if b[-1] > widest[-1] and abs(b[1] - widest[1]) > dist_threshold:
+                second_widest = widest
+                widest = b
+            elif abs(b[1] - widest[1]) > dist_threshold:
+                second_widest = b
+    return [widest, second_widest]
+
+
+def _find_bars(img: np.ndarray, h: int, w: int) -> array(tuple[int, int, int, int, int]):
+    step = 11
+    y_step = step
+
+    bars_up = _find_bars_up(step, y_step, img, h, w)
+    bars_down = _find_bars_down(step, y_step, img, h, w)
+
+    # Get longest found lines
+    # (We assume the two longest lines are those of the rectangle frame)
+    longest_up = _get_longest_bars(bars_up)
+    longest_down = _get_longest_bars(bars_down)
+
+    if longest_up[0][-1] > longest_down[0][-1]:
+        return longest_up
+    elif longest_up[0][-1] < longest_down[0][-1]:
+        return longest_down
+    else:
+        if longest_up[1][-1] > longest_down[1][-1]:
+            return longest_up
+        else:
+            return longest_down
+
+
+def _find_bars_up(step: int, y_step: int, img: np.ndarray, h: int, w: int) \
+    -> array(tuple[int, int, int, int, int]):
+    bars = []
+
+    def check_for_y_up(img, x, y, y_step):
+        for yc in range(y_step):
+            if 0 <= y - yc and img[y - yc, x] < 1:
+                return (True, y - yc)
+        return (False, -1)
+
+    y = h - 1
+    while y >= 0:
+        new_bars = _find_bars_loop(check_for_y_up, y, step, y_step, img, h, w)
+        bars = bars + new_bars
+        y -= step
+
+    return bars
+
+def _find_bars_down(step: int, y_step: int, img: np.ndarray, h: int, w: int) \
+    -> array(tuple[int, int, int, int, int]):
+    bars = []
+
+    def check_for_y_down(img, x, y, y_step):
+        for yc in range(y_step):
+            if y + yc < h and img[y + yc, x] < 1:
+                return (True, y + yc)
+        return (False, -1)
+
+    y = 0
+    while y < h:
+        new_bars = _find_bars_loop(check_for_y_down, y, step, y_step, img, h, w)
+        bars = bars + new_bars
+        y += step
+
+    return bars
+
+
+def _find_bars_loop(check_for_y: Callable[[np.ndarray, int, int, int], tuple[bool, int]], \
+    y: int, step: int, y_step: int, img: np.ndarray, h: int, w: int) \
+    -> array(tuple[int, int, int, int, int]):
+    bars = []
+    x = 0
+    while x < w:
+        bar_width = 0
+        bars.append((x,y,0,0,0))
+        while True:
+            ok, next_y = check_for_y(img, x, y, y_step)
+            if not ok:
+                break
+            y = next_y
+            bar_width += step
+            x += step
+            if x >= w or y >= h:
+                break;
+        if bar_width > w//3:
+            xs, ys, _,_,_ = bars[-1]
+            bars[-1] = (xs,ys,x,y,bar_width)
+        else:
+            bars.pop()
+        x += step
+
+    return bars
+
 
 def read_bits(path) -> np.ndarray:
     img = cv2.imread(path, 0)
@@ -73,50 +172,10 @@ def read_bits(path) -> np.ndarray:
     img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel)
     img = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel)
 
-    def check_for_y(img, x, y, y_step):
-        for yc in range(y_step):
-            if y + yc < h and img[y + yc, x] < 1:
-                return (True, y + yc)
-        return (False, -1)
-
-
     # Find horizontal or slightly tilted lines
-    step = 11
-    y_step = step
-    bars = []
-    y = 0
-    while y < h:
-        x = 0
-        while x < w:
-            bar_width = 0
-            bars.append((x,y,0,0,0))
-            while True:
-                ok, next_y = check_for_y(img, x, y, y_step)
-                if not ok:
-                    break
-                y = next_y
-                bar_width += step
-                x += step
-                if x >= w or y >= h:
-                    break;
-            if bar_width > w//3:
-                xs, ys, _,_,_ = bars[-1]
-                bars[-1] = (xs,ys,x,y,bar_width)
-            else:
-                bars.pop()
-            x += step
-        y += step
-
-    # Get longest found lines
-    # (We assume the two longest lines are those of the rectangle frame)
-    widest = second_widest = (0,0,0,0,0)
-    for b in bars:
-        if b[-1] > second_widest[-1]:
-            if b[-1] > widest[-1]:
-                second_widest = widest
-                widest = b
-            else:
-                second_widest = b
+    bars = _find_bars(img, h, w)
+    widest = bars[0]
+    second_widest = bars[1]
 
     # Rotate image
     angle = math.degrees(math.atan2(widest[3] - widest[1], widest[2] - widest[0]))
@@ -137,7 +196,7 @@ def read_bits(path) -> np.ndarray:
 
     # Crop image
     img = img[ys:ye, xs:xe]
-    save(img, 'output.png')
+    _save(img, 'output.png')
 
 
 def write_bits(bits, path) -> None:
