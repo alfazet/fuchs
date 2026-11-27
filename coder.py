@@ -37,6 +37,11 @@ def _rectangulate(bits: np.ndarray, w: int, l: int = -1) -> np.ndarray:
     rect = np.reshape(bits, (l, w))
     return rect
 
+def _derectangulate(rect: np.ndarray) -> np.ndarray:
+    h, w = rect.shape
+    bits = np.reshape(rect, (1, h*w))
+    return bits
+
 def encode_to_image(s: str, path, w: int, l: int = -1) -> None:
     bits = _str2bits(s)
     enc_bits = _encode(bits)
@@ -45,4 +50,7 @@ def encode_to_image(s: str, path, w: int, l: int = -1) -> None:
 
 def decode_from_image(path) -> str:
     rect = iio.read_bits(path)
-    return 'asdf'
+    enc_bits = _derectangulate(rect)
+    bits = _decode(enc_bits)
+    s = _bits2str(bits)
+    return s

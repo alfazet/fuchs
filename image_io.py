@@ -68,12 +68,16 @@ def _get_longest_bars(bars: array(tuple[int, int, int, int, int])) -> array(tupl
     """
     widest = second_widest = (0,0,0,0,0)
     dist_threshold = 100
+
+    def additional_check(b, widest):
+        return abs(b[1] - widest[1]) > dist_threshold or abs(widest[-1]) < 1 or b[-1] / widest[-1] > 1.5
+
     for b in bars:
         if b[-1] > second_widest[-1]:
-            if b[-1] > widest[-1] and abs(b[1] - widest[1]) > dist_threshold:
+            if b[-1] > widest[-1] and additional_check(b, widest):
                 second_widest = widest
                 widest = b
-            elif abs(b[1] - widest[1]) > dist_threshold:
+            elif additional_check(b, widest):
                 second_widest = b
     return [widest, second_widest]
 
@@ -248,7 +252,8 @@ def read_bits(path) -> np.ndarray:
     second_widest = bars[1]
 
     # Rotate image
-    angle = math.degrees(math.atan2(widest[3] - widest[1], widest[2] - widest[0]))
+    angle = math.degrees(math.atan2(second_widest[3] - second_widest[1], \
+        second_widest[2] - second_widest[0]))
     xs = widest[0] if widest[0] < second_widest[0] else second_widest[0]
     ys = widest[1] if widest[1] < second_widest[1] else second_widest[1]
     xe = widest[2] if widest[2] > second_widest[2] else second_widest[2]
@@ -279,7 +284,7 @@ def read_bits(path) -> np.ndarray:
     print(f'w:{widest}, s:{second_widest}')
     # These bars have to be close to img width in their length
     # Otherwise do not crop as one bar must have been cropped earlier
-    if widest[-1] / w > 0.5 and second_widest[-1] / w > 0.5:
+    if widest[-1] / w > 0.8 and second_widest[-1] / w > 0.8:
         xs = widest[0] if widest[0] < second_widest[0] else second_widest[0]
         ys = widest[1] if widest[1] < second_widest[1] else second_widest[1]
         xe = widest[2] if widest[2] > second_widest[2] else second_widest[2]
@@ -290,9 +295,28 @@ def read_bits(path) -> np.ndarray:
 
     # Get bit size
     bit_size = _get_bit_size(img)
+    print(f'bs: {bit_size}')
+    # Get code dimensions
     h, w = img.shape
-    bit_h, bit_w = int(h - bit_size/2) // bit_size, int(w - bit_size/2) // bit_size
+    dims = (int(math.floor((h - bit_size/2) / bit_size)), int(math.floor((w - bit_size/2) / bit_size)))
+    bit_h, bit_w = dims
     print(f'dims: {bit_w}x{bit_h}')
+
+    # Read bits
+    bits = np.ndarray(dims, dtype=np.uint8)
+    delta = bit_size // 6
+    for y in range(bit_h):
+        for x in range(bit_w):
+            x_img = x * bit_size + bit_size // 2
+            y_img = y * bit_size + bit_size // 2
+            bits[y, x] = 0 if img[y_img, x_img] > 64 else 1
+            bits[y, x] = bits[y, x] if img[y_img - delta, x_img - delta] > 64 else bits[y, x] + 1
+            bits[y, x] = bits[y, x] if img[y_img - delta, x_img + delta] > 64 else bits[y, x] + 1
+            bits[y, x] = bits[y, x] if img[y_img + delta, x_img - delta] > 64 else bits[y, x] + 1
+            bits[y, x] = bits[y, x] if img[y_img + delta, x_img + delta] > 64 else bits[y, x] + 1
+            bits[y, x] = 0 if bits[y, x] < 3 else 1
+    print(bits)
+    return bits
 
 
 def write_bits(bits, path) -> None:
